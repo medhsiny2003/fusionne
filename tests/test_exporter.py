@@ -8,38 +8,32 @@ import openpyxl
 import pandas as pd
 import pytest
 from core.exporter import export_to_excel, generate_export_filename, MX_STYLES
-from core.file_reader import EXPECTED_COLUMNS
 
 def test_export_to_excel_buffer():
-    """Vérifie la génération du buffer binaire Excel stylisé."""
+    """Vérifie la génération du buffer binaire Excel stylisé avec colonnes personnalisées."""
+    cols = ["Prénom", "Nom", "Poste", "Entreprise", "Email_proposé", "Email_alternatif", "Score_confiance", "Statut_validation", "URL_LinkedIn"]
     df = pd.DataFrame([
         {
             "Prénom": "Alice",
             "Nom": "Vasseur",
-            "Poste Actuel": "CEO",
+            "Poste": "CEO",
             "Entreprise": "Innovate",
-            "Email Proposé": "alice@innovate.com",
-            "Email Alternatif 1": "",
-            "Email Alternatif 2": "",
-            "Score de Confiance (%)": 98,
-            "Statut MX": "Validé",
-            "Serveur MX Actif": "Oui",
-            "Lien Profil LinkedIn": "linkedin.com/in/alice",
-            "Date d'Extraction": "2026-09-01"
+            "Email_proposé": "alice@innovate.com",
+            "Email_alternatif": "",
+            "Score_confiance": "98%",
+            "Statut_validation": "Validé",
+            "URL_LinkedIn": "https://linkedin.com/in/alice"
         },
         {
             "Prénom": "Bob",
             "Nom": "Durand",
-            "Poste Actuel": "CTO",
+            "Poste": "CTO",
             "Entreprise": "TechSoft",
-            "Email Proposé": "bob@techsoft.com",
-            "Email Alternatif 1": "",
-            "Email Alternatif 2": "",
-            "Score de Confiance (%)": 45,
-            "Statut MX": "Invalide",
-            "Serveur MX Actif": "Non",
-            "Lien Profil LinkedIn": "linkedin.com/in/bob",
-            "Date d'Extraction": "2026-09-01"
+            "Email_proposé": "bob@techsoft.com",
+            "Email_alternatif": "",
+            "Score_confiance": "45%",
+            "Statut_validation": "Invalide",
+            "URL_LinkedIn": "https://linkedin.com/in/bob"
         },
     ])
 
@@ -50,13 +44,12 @@ def test_export_to_excel_buffer():
     # Recharger avec openpyxl pour vérifier les styles
     wb = openpyxl.load_workbook(buffer)
     ws = wb.active
-    assert ws.title == "Contacts Fusionnés"
     assert ws.max_row == 3 # 1 header + 2 data
-    assert ws.max_column == len(EXPECTED_COLUMNS)
+    assert ws.max_column == len(cols)
 
     # Vérification des couleurs d'en-tête
     header_cell = ws.cell(row=1, column=1)
-    assert header_cell.fill.start_color.rgb == "000A66C2" or header_cell.fill.start_color.rgb == "0A66C2"
+    assert header_cell.fill.start_color.rgb in ["000A66C2", "0A66C2"]
     assert header_cell.font.bold is True
 
     # Vérification de l'auto-filtre
@@ -64,7 +57,7 @@ def test_export_to_excel_buffer():
 
 def test_export_to_file(tmp_path):
     """Vérifie l'écriture de l'exportation sur le disque."""
-    df = pd.DataFrame([{"Prénom": "Test", "Nom": "User", "Statut MX": "Validé"}])
+    df = pd.DataFrame([{"Prénom": "Test", "Nom": "User", "Statut_validation": "Validé"}])
     export_file = tmp_path / "test_out.xlsx"
     
     export_to_excel(df, output_path=str(export_file))

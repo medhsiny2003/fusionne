@@ -1,18 +1,20 @@
 """
 Application Streamlit - FUSION : Fusionneur Excel avec Déduplication Intelligente.
-Interface moderne, épurée et professionnelle (Corporate LinkedIn Blue).
+Préserve 100% des colonnes et données d'origine sans altération.
+Confidentialité totale des données.
 """
 
 import io
 import time
+import unicodedata
 from datetime import datetime
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
 from core.logger import setup_logger, log_buffer
-from core.file_reader import read_excel_files, EXPECTED_COLUMNS
-from core.deduplicator import deduplicate_contacts, filter_contacts
+from core.file_reader import read_excel_files
+from core.deduplicator import deduplicate_contacts, filter_contacts, detect_column_roles
 from core.exporter import export_to_excel, generate_export_filename
 
 # Initialisation du logger
@@ -29,7 +31,6 @@ st.set_page_config(
 # Thème CSS moderne, minimaliste et professionnel
 st.markdown("""
 <style>
-    /* Polices et base */
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
     
     html, body, [class*="css"] {
@@ -164,8 +165,8 @@ st.markdown("""
 <div class="hero-container">
     <div class="hero-title">⚡ FUSION &bull; Fusionneur Excel & Déduplication Intelligente</div>
     <div class="hero-subtitle">
-        Fusionnez instantanément vos fichiers de prospection LinkedIn (5 à 50 fichiers Excel), 
-        éliminez les doublons en cascade (LinkedIn &gt; Email &gt; Triplet) et téléchargez une base propre et enrichie.
+        Fusionnez instantanément vos fichiers Excel en conservant <b>100% de vos colonnes et données d'origine</b> sans aucune perte.<br>
+        Déduplication intelligente en cascade (LinkedIn &gt; Email &gt; Triplet) et export Excel stylisé.
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -178,7 +179,7 @@ with upload_col:
         "📁 Déposez vos fichiers Excel (.xlsx, .xls) :",
         type=["xlsx", "xls"],
         accept_multiple_files=True,
-        help="Glissez-déposez un ou plusieurs fichiers Excel. Le système adapte automatiquement les noms de colonnes."
+        help="Sélectionnez vos fichiers Excel. Toutes vos colonnes sont préservées à l'identique."
     )
 
 with action_col:
@@ -198,13 +199,13 @@ if uploaded_files:
 
 # Traitement de fusion
 if btn_process and uploaded_files:
-    with st.spinner("Traitement et déduplication en cascade en cours..."):
-        # 1. Lecture
+    with st.spinner("Traitement et déduplication en cours..."):
+        # 1. Lecture sans altération des colonnes
         raw_df, count_files, total_raw = read_excel_files(uploaded_files)
         st.session_state.raw_df = raw_df
 
         if not raw_df.empty:
-            # 2. Déduplication
+            # 2. Déduplication intelligente
             dedup_df, stats = deduplicate_contacts(raw_df)
             
             # 3. Export Excel stylisé
@@ -222,6 +223,7 @@ if btn_process and uploaded_files:
 if st.session_state.dedup_df is not None and st.session_state.stats is not None:
     df_result = st.session_state.dedup_df
     stats = st.session_state.stats
+    roles = detect_column_roles(list(df_result.columns))
 
     st.markdown("---")
     
@@ -232,16 +234,16 @@ if st.session_state.dedup_df is not None and st.session_state.stats is not None:
         <div class="metric-card">
             <div class="metric-title">Fichiers Sources</div>
             <div class="metric-value" style="color: #0A66C2;">{len(uploaded_files) if uploaded_files else 1}</div>
-            <div class="metric-footer">Imports Excel combinés</div>
+            <div class="metric-footer">Fichiers traités</div>
         </div>
         """, unsafe_allow_html=True)
         
     with k2:
         st.markdown(f"""
         <div class="metric-card">
-            <div class="metric-title">Contacts Bruts</div>
+            <div class="metric-title">Lignes Brutes</div>
             <div class="metric-value">{stats['initial_rows']:,}</div>
-            <div class="metric-footer">Avant déduplication</div>
+            <div class="metric-footer">Total avant déduplication</div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -259,7 +261,7 @@ if st.session_state.dedup_df is not None and st.session_state.stats is not None:
         <div class="metric-card" style="border-top: 3px solid #10B981;">
             <div class="metric-title">Contacts Uniques</div>
             <div class="metric-value" style="color: #10B981;">{stats['final_rows']:,}</div>
-            <div class="metric-footer">Base nettoyée finale</div>
+            <div class="metric-footer">{len(df_result.columns)} colonnes préservées</div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -268,12 +270,10 @@ if st.session_state.dedup_df is not None and st.session_state.stats is not None:
     c1, c2, c3 = st.columns(3)
     c1.info(f"🔗 **Doublons détectés par LinkedIn :** {stats['dedup_by_linkedin']}")
     c2.info(f"✉️ **Doublons détectés par Email :** {stats['dedup_by_email']}")
-    c3.info(f"👤 **Doublons détectés par Triplet (Nom/Prénom/Boîte) :** {stats['dedup_by_triplet']}")
+    c3.info(f"👤 **Doublons détectés par Triplet :** {stats['dedup_by_triplet']}")
 
     # 2. Bouton Téléchargement Prominent
     st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
-    
-    # Export buffer toujours prêt
     current_export_buffer = export_to_excel(df_result)
     
     dl_col1, dl_col2 = st.columns([3, 1])
@@ -287,41 +287,43 @@ if st.session_state.dedup_df is not None and st.session_state.stats is not None:
             use_container_width=True,
         )
     with dl_col2:
-        st.caption(f"✨ Format openpyxl avec en-têtes stylisés (#0A66C2), filtres automatiques et coloration du statut.")
+        st.caption(f"✨ 100% des colonnes conservées, filtres automatiques et styles openpyxl.")
 
     # 3. Onglets de Consultation
     tab_data, tab_charts, tab_logs = st.tabs(["📋 Aperçu des Contacts", "📈 Graphiques & Statistiques", "📜 Journal d'Exécution"])
 
     with tab_data:
-        # Recherche rapide
-        search_kw = st.text_input("🔍 Filtrer les résultats (nom, poste, entreprise, email...) :", "")
+        search_kw = st.text_input("🔍 Recherche rapide dans la table :", "")
         
         display_df = df_result.copy()
         if search_kw:
             mask = display_df.astype(str).apply(lambda row: row.str.contains(search_kw, case=False, na=False).any(), axis=1)
             display_df = display_df[mask]
 
-        cols_clean = [c for c in EXPECTED_COLUMNS if c in display_df.columns]
+        # Affichage direct de toutes les colonnes réelles du fichier
         st.dataframe(
-            display_df[cols_clean],
+            display_df,
             use_container_width=True,
             hide_index=True,
             height=420,
         )
-        st.caption(f"Affichage de {len(display_df)} sur {len(df_result)} contacts uniques.")
+        st.caption(f"Affichage de {len(display_df)} sur {len(df_result)} contacts uniques ({len(df_result.columns)} colonnes).")
 
     with tab_charts:
         ch1, ch2 = st.columns([3, 2])
+        col_ent = roles["entreprise"]
+        col_stat = roles["statut"]
+
         with ch1:
-            if "Entreprise" in df_result.columns and not df_result.empty:
-                top_comp = df_result["Entreprise"].dropna().value_counts().head(10).reset_index()
+            if col_ent and col_ent in df_result.columns and not df_result.empty:
+                top_comp = df_result[col_ent].dropna().value_counts().head(10).reset_index()
                 top_comp.columns = ["Entreprise", "Contacts"]
                 fig_bar = px.bar(
                     top_comp,
                     x="Contacts",
                     y="Entreprise",
                     orientation="h",
-                    title="🏢 Top 10 des Entreprises",
+                    title=f"🏢 Top 10 des Entreprises ({col_ent})",
                     color="Contacts",
                     color_continuous_scale=["#93C5FD", "#0A66C2"]
                 )
@@ -333,14 +335,14 @@ if st.session_state.dedup_df is not None and st.session_state.stats is not None:
                 st.plotly_chart(fig_bar, use_container_width=True)
 
         with ch2:
-            if "Statut MX" in df_result.columns and not df_result.empty:
-                mx_counts = df_result["Statut MX"].fillna("Non renseigné").value_counts().reset_index()
+            if col_stat and col_stat in df_result.columns and not df_result.empty:
+                mx_counts = df_result[col_stat].fillna("Non renseigné").value_counts().reset_index()
                 mx_counts.columns = ["Statut", "Total"]
                 fig_pie = px.pie(
                     mx_counts,
                     names="Statut",
                     values="Total",
-                    title="🛡️ Répartition Statut Validation / MX",
+                    title=f"🛡️ Répartition du Statut ({col_stat})",
                     hole=0.45,
                     color_discrete_sequence=["#10B981", "#F59E0B", "#EF4444", "#64748B"]
                 )
@@ -364,16 +366,14 @@ if st.session_state.dedup_df is not None and st.session_state.stats is not None:
         else:
             st.info("Aucun log généré.")
 else:
-    # État initial d'attente
     st.markdown("""
     <div style="background: #F8FAFC; border: 1px dashed #CBD5E1; border-radius: 12px; padding: 40px 20px; text-align: center; color: #64748B; margin-top: 10px;">
         <div style="font-size: 2.5rem; margin-bottom: 10px;">📂</div>
         <div style="font-size: 1.1rem; font-weight: 600; color: #334155;">Aucun fichier chargé pour le moment</div>
-        <div style="font-size: 0.9rem; margin-top: 4px;">Glissez vos fichiers Excel ci-dessus puis cliquez sur "Fusionner les fichiers" pour démarrer.</div>
+        <div style="font-size: 0.9rem; margin-top: 4px;">Glissez vos fichiers Excel ci-dessus puis cliquez sur "🚀 Fusionner les fichiers".</div>
     </div>
     """, unsafe_allow_html=True)
 
-    # Console de logs pliable
     with st.expander("📜 Logs d'activité", expanded=False):
         logs = log_buffer.get_logs()
         if logs:
