@@ -8,9 +8,11 @@ from core.deduplicator import deduplicate_contacts, filter_contacts, normalize_l
 
 def test_normalize_helpers():
     """Test des helpers de normalisation."""
-    # LinkedIn
+    # LinkedIn avec sous-domaines pays et fragments
     assert normalize_linkedin_url("https://www.linkedin.com/in/john-doe/") == "linkedin.com/in/john-doe"
-    assert normalize_linkedin_url("http://linkedin.com/in/john-doe?trk=public") == "linkedin.com/in/john-doe"
+    assert normalize_linkedin_url("https://ma.linkedin.com/in/john-doe") == "linkedin.com/in/john-doe"
+    assert normalize_linkedin_url("https://re.linkedin.com/in/john-doe/") == "linkedin.com/in/john-doe"
+    assert normalize_linkedin_url("http://fr.linkedin.com/in/john-doe?trk=public") == "linkedin.com/in/john-doe"
     assert normalize_linkedin_url(None) == ""
     assert normalize_linkedin_url("") == ""
 
@@ -20,7 +22,7 @@ def test_normalize_helpers():
     assert normalize_email(None) == ""
 
 def test_deduplication_criterion_1_linkedin():
-    """Critère 1 : Deux lignes avec le même profil LinkedIn doivent être fusionnées."""
+    """Critère 1 : Deux lignes avec le même profil LinkedIn (même sous-domaines différents) doivent être fusionnées."""
     df = pd.DataFrame([
         {
             "Prénom": "Jean",
@@ -33,7 +35,7 @@ def test_deduplication_criterion_1_linkedin():
             "Score de Confiance (%)": "80%",
             "Statut MX": "Validé",
             "Serveur MX Actif": "Oui",
-            "Lien Profil LinkedIn": "https://www.linkedin.com/in/jeandupont/",
+            "Lien Profil LinkedIn": "https://re.linkedin.com/in/jeandupont/",
             "Date d'Extraction": "2026-01-01"
         },
         {
@@ -47,7 +49,7 @@ def test_deduplication_criterion_1_linkedin():
             "Score de Confiance (%)": 95,
             "Statut MX": "Validé",
             "Serveur MX Actif": "Oui",
-            "Lien Profil LinkedIn": "https://linkedin.com/in/jeandupont?trk=123",
+            "Lien Profil LinkedIn": "https://ma.linkedin.com/in/jeandupont?trk=123",
             "Date d'Extraction": "2026-02-01"
         }
     ])

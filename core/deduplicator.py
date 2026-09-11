@@ -1,7 +1,7 @@
 """
 Module de déduplication intelligente en cascade pour Fusion.
-Applique les 3 critères en cascade avec arbitrage par score de confiance,
-complétude des données et fusion des emails alternatifs.
+Applique les 3 critères en cascade avec normalisation internationale LinkedIn,
+arbitrage par score de confiance, complétude des données et fusion des emails alternatifs.
 """
 
 import re
@@ -18,7 +18,6 @@ def normalize_text(text: Optional[str]) -> str:
     if text is None or pd.isna(text):
         return ""
     s = str(text).strip().lower()
-    # Remplacer les espaces multiples par un seul
     s = re.sub(r"\s+", " ", s)
     return s
 
@@ -27,7 +26,6 @@ def normalize_email(email: Optional[str]) -> str:
     if email is None or pd.isna(email):
         return ""
     e = str(email).strip().lower()
-    # Simple validation basique de non-vide
     if "@" not in e:
         return ""
     return e
@@ -35,8 +33,9 @@ def normalize_email(email: Optional[str]) -> str:
 def normalize_linkedin_url(url: Optional[str]) -> str:
     """
     Normalise une URL de profil LinkedIn :
-    - Enlève les paramètres de tracking (?...)
-    - Enlève le protocole (http/https) et www.
+    - Enlève les paramètres de tracking (?...) et fragments (#...)
+    - Enlève le protocole (http/https)
+    - Normalise tous les sous-domaines (ma.linkedin.com, fr.linkedin.com, re.linkedin.com, www.linkedin.com -> linkedin.com)
     - Enlève le slash final
     - Passage en minuscules
     """
@@ -47,20 +46,14 @@ def normalize_linkedin_url(url: Optional[str]) -> str:
         return ""
     
     # Enlever fragments et query params
-    try:
-        parsed = urllib.parse.urlparse(u)
-        path = parsed.path.rstrip("/")
-        # Extraire le slug /in/xxx
-        netloc = parsed.netloc.replace("www.", "")
-        if not netloc:
-            netloc = "linkedin.com"
-        clean_url = f"{netloc}{path}"
-        return clean_url
-    except Exception:
-        # Fallback regex
-        u = re.sub(r"\?.*$", "", u)
-        u = re.sub(r"^https?://(www\.)?", "", u).rstrip("/")
-        return u
+    u = re.sub(r"[?#].*$", "", u)
+    # Enlever protocoles
+    u = re.sub(r"^https?://", "", u)
+    # Remplacer tout sous-domaine par linkedin.com (ex: ma.linkedin.com, re.linkedin.com, www.linkedin.com)
+    u = re.sub(r"^[a-z0-9\-_.]+\.linkedin\.com", "linkedin.com", u)
+    # Enlever trailing slash
+    u = u.rstrip("/")
+    return u
 
 def parse_confidence_score(score_val) -> float:
     """Convertit une valeur de score de confiance en float entre 0 et 100."""
@@ -190,8 +183,7 @@ def deduplicate_contacts(df: pd.DataFrame) -> Tuple[pd.DataFrame, dict]:
 
     work_df["_key_triplet"] = work_df.apply(build_triplet, axis=1)
 
-    # Attribution d'un ID de cluster unique (Union-Find / Grouping en cascade)
-    # Groupe 1: Par LinkedIn (pour les lignes avec linkedin non vide)
+    # Attribution d'un ID de cluster unique (Cascade : LinkedIn > Email > Triplet)
     cluster_map = {} # row_id -> cluster_id
     next_cluster_id = 1
 
@@ -301,9 +293,16 @@ def filter_contacts(
 
     filtered_df = df.copy()
 
-    # 1. Filtre par Statut MX
-    if mx_status and "Statut MX" in filtered_df.columns:
-        filtered_df = filtered_df[filtered_df["Statut MX"].astype(str).isin(mx_status)]
+    # 1. Filtre par Statut MX (tolérant à la casse et non-bloquant si vide)
+    if mx_status is not None and len(mx_status) > 0 and "Statut MX" in filtered_df.columns:
+        allowed = [str(s).strip().lower() for s in mx_status]
+        # Si 'tous' est présent, on ne filtre pas
+        if "tous" not in allowed:
+            filtered_df = filtered_df[
+                filtered_df["Statut MX"].apply(
+                    lambda val: str(val).strip().lower() in allowed if (pd.notna(val) and str(val).strip() != "") else True
+                )
+            ]
 
     # 2. Filtre par Score de Confiance
     if min_confidence > 0.0 and "Score de Confiance (%)" in filtered_df.columns:
@@ -311,7 +310,7 @@ def filter_contacts(
         filtered_df = filtered_df[scores >= min_confidence]
 
     # 3. Filtre par Entreprise
-    if selected_companies and "Entreprise" in filtered_df.columns:
+    if selected_companies and len(selected_companies) > 0 and "Entreprise" in filtered_df.columns:
         filtered_df = filtered_df[filtered_df["Entreprise"].astype(str).isin(selected_companies)]
 
     return filtered_df.reset_index(drop=True)
