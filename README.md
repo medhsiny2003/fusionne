@@ -86,8 +86,8 @@ fusion/
 
 ### 1. Cloner le projet
 ```bash
-git clone https://github.com/votre-compte/fusion.git
-cd fusion
+git clone https://github.com/medhsiny2003/fusionne.git
+cd fusionne
 ```
 
 ### 2. Créer et activer un environnement virtuel (recommandé)
