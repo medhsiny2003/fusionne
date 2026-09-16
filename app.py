@@ -1,7 +1,7 @@
 """
 Application Streamlit - FUSION : Fusionneur Excel avec Déduplication Intelligente.
 Préserve 100% des colonnes et données d'origine sans altération.
-Nettoyage des emails, suppression des lignes vides et groupement contigu par entreprise.
+Studio d'édition, assistant de filtrage intelligent, suppression par société/lignes et export instantané.
 """
 
 import io
@@ -16,13 +16,19 @@ from core.logger import setup_logger, log_buffer
 from core.file_reader import read_excel_files
 from core.deduplicator import deduplicate_contacts, filter_contacts, detect_column_roles
 from core.exporter import export_to_excel, generate_export_filename
+from core.filter_assistant import (
+    parse_line_ranges,
+    delete_by_indices,
+    delete_by_companies,
+    execute_smart_command
+)
 
 # Initialisation du logger
 logger = setup_logger()
 
 # Configuration Streamlit
 st.set_page_config(
-    page_title="Fusion — Déduplication & Nettoyage Excel",
+    page_title="Fusion — Déduplication & Studio de Filtrage",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -40,22 +46,22 @@ st.markdown("""
     /* Header principal */
     .hero-container {
         background: linear-gradient(135deg, #0A66C2 0%, #004182 100%);
-        padding: 24px 30px;
-        border-radius: 14px;
+        padding: 22px 28px;
+        border-radius: 12px;
         color: white;
-        margin-bottom: 24px;
+        margin-bottom: 20px;
         box-shadow: 0 4px 16px rgba(10, 102, 194, 0.15);
     }
     .hero-title {
-        font-size: 1.8rem;
+        font-size: 1.7rem;
         font-weight: 700;
         margin: 0;
         display: flex;
         align-items: center;
-        gap: 12px;
+        gap: 10px;
     }
     .hero-subtitle {
-        font-size: 0.95rem;
+        font-size: 0.92rem;
         color: #E1E9F4;
         margin-top: 6px;
         font-weight: 400;
@@ -66,27 +72,36 @@ st.markdown("""
     .metric-card {
         background: #FFFFFF;
         border-radius: 10px;
-        padding: 16px 20px;
+        padding: 14px 18px;
         border: 1px solid #E2E8F0;
         box-shadow: 0 1px 3px rgba(0,0,0,0.05);
         text-align: center;
     }
     .metric-title {
-        font-size: 0.8rem;
+        font-size: 0.78rem;
         text-transform: uppercase;
-        letter-spacing: 0.6px;
+        letter-spacing: 0.5px;
         color: #64748B;
         font-weight: 600;
     }
     .metric-value {
-        font-size: 1.8rem;
+        font-size: 1.75rem;
         font-weight: 700;
         color: #0F172A;
         margin: 4px 0;
     }
     .metric-footer {
-        font-size: 0.78rem;
+        font-size: 0.75rem;
         color: #94A3B8;
+    }
+
+    /* Boîtes d'action studio */
+    .studio-box {
+        background: #F8FAFC;
+        border: 1px solid #E2E8F0;
+        border-radius: 10px;
+        padding: 16px;
+        margin-bottom: 16px;
     }
 
     /* Badges de fichiers */
@@ -103,7 +118,7 @@ st.markdown("""
         font-weight: 500;
     }
 
-    /* Bouton principal */
+    /* Boutons */
     div.stButton > button {
         border-radius: 8px !important;
         font-weight: 600 !important;
@@ -135,12 +150,16 @@ if "raw_df" not in st.session_state:
     st.session_state.raw_df = None
 if "dedup_df" not in st.session_state:
     st.session_state.dedup_df = None
+if "history" not in st.session_state:
+    st.session_state.history = []
 if "stats" not in st.session_state:
     st.session_state.stats = None
 if "excel_buffer" not in st.session_state:
     st.session_state.excel_buffer = None
 if "export_filename" not in st.session_state:
     st.session_state.export_filename = ""
+if "last_action_msg" not in st.session_state:
+    st.session_state.last_action_msg = ""
 
 def format_file_size(size_bytes: int) -> str:
     """Convertit une taille en octets en format lisible."""
@@ -151,22 +170,43 @@ def format_file_size(size_bytes: int) -> str:
     else:
         return f"{size_bytes / (1024 * 1024):.2f} Mo"
 
+def push_history(df: pd.DataFrame):
+    """Sauvegarde l'état actuel dans l'historique pour permettre l'annulation (Undo)."""
+    if df is not None:
+        st.session_state.history.append(df.copy())
+        if len(st.session_state.history) > 10:
+            st.session_state.history.pop(0)
+
+def undo_last_action():
+    """Annule la dernière action de filtrage ou suppression."""
+    if st.session_state.history:
+        prev_df = st.session_state.history.pop()
+        st.session_state.dedup_df = prev_df
+        if st.session_state.stats:
+            roles = detect_column_roles(list(prev_df.columns))
+            col_ent = roles["entreprise"]
+            st.session_state.stats["final_rows"] = len(prev_df)
+            st.session_state.stats["unique_companies"] = prev_df[col_ent].dropna().nunique() if (col_ent and col_ent in prev_df.columns) else 0
+        st.session_state.last_action_msg = "↩️ Dernière action annulée avec succès."
+        st.toast("Action annulée !", icon="↩️")
+
 def reset_state():
     """Réinitialise l'ensemble des données."""
     st.session_state.raw_df = None
     st.session_state.dedup_df = None
+    st.session_state.history = []
     st.session_state.stats = None
     st.session_state.excel_buffer = None
     st.session_state.export_filename = ""
+    st.session_state.last_action_msg = ""
     log_buffer.clear()
 
 # --- HERO BANNER ---
 st.markdown("""
 <div class="hero-container">
-    <div class="hero-title">⚡ FUSION &bull; Déduplication, Nettoyage & Groupement Excel</div>
+    <div class="hero-title">⚡ FUSION &bull; Déduplication, Nettoyage & Studio IA de Filtrage</div>
     <div class="hero-subtitle">
-        Fusionnez vos fichiers, <b>validez les emails réels</b>, supprimez les lignes vides et <b>regroupez chaque entreprise en section continue</b>.<br>
-        100% de vos colonnes et données utiles sont conservées dans un fichier prêt pour vos campagnes d'envoi.
+        Fusionnez vos fichiers Excel sans doublons, <b>groupez par entreprise</b> et filtrez précisément vos données à la ligne ou à la société près grâce à l'assistant intelligent.
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -179,13 +219,13 @@ with upload_col:
         "📁 Déposez vos fichiers Excel (.xlsx, .xls) :",
         type=["xlsx", "xls"],
         accept_multiple_files=True,
-        help="Sélectionnez un ou plusieurs fichiers Excel. Le système nettoie, déduplique et groupe par entreprise."
+        help="Sélectionnez vos fichiers Excel. Toutes vos colonnes sont préservées à l'identique."
     )
 
 with action_col:
     st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
     btn_process = st.button("🚀 Fusionner & Nettoyer", type="primary", use_container_width=True, disabled=not uploaded_files)
-    btn_clear = st.button("🗑️ Réinitialiser", use_container_width=True, on_click=reset_state)
+    btn_clear = st.button("🗑️ Réinitialiser tout", use_container_width=True, on_click=reset_state)
 
 # Affichage des badges de fichiers
 if uploaded_files:
@@ -197,29 +237,24 @@ if uploaded_files:
     chips_html += f'<span class="file-chip" style="background: #E0F2FE; border-color: #7DD3FC; color: #0369A1; font-weight: 600;">📦 {len(uploaded_files)} fichier(s) • {format_file_size(total_size)}</span></div>'
     st.markdown(chips_html, unsafe_allow_html=True)
 
-# Traitement de fusion
+# Traitement de fusion initiale
 if btn_process and uploaded_files:
     with st.spinner("Nettoyage des emails, déduplication et groupement par société en cours..."):
-        # 1. Lecture sans altération des colonnes
         raw_df, count_files, total_raw = read_excel_files(uploaded_files)
         st.session_state.raw_df = raw_df
 
         if not raw_df.empty:
-            # 2. Déduplication intelligente, nettoyage et groupement par société
             dedup_df, stats = deduplicate_contacts(raw_df)
-            
-            # 3. Export Excel stylisé
             export_name = generate_export_filename()
-            excel_buffer = export_to_excel(dedup_df)
 
             st.session_state.dedup_df = dedup_df
+            st.session_state.history = []
             st.session_state.stats = stats
-            st.session_state.excel_buffer = excel_buffer
             st.session_state.export_filename = export_name
-            
-            st.toast("Base fusionnée, dédupliquée et groupée par entreprise !", icon="✅")
+            st.session_state.last_action_msg = "Base fusionnée, dédupliquée et groupée par entreprise."
+            st.toast("Fusion et déduplication terminées !", icon="✅")
 
-# --- RÉSULTATS & VISUALISATIONS ---
+# --- RÉSULTATS & STUDIO D'ÉDITION ---
 if st.session_state.dedup_df is not None and st.session_state.stats is not None:
     df_result = st.session_state.dedup_df
     stats = st.session_state.stats
@@ -241,7 +276,7 @@ if st.session_state.dedup_df is not None and st.session_state.stats is not None:
     with k2:
         st.markdown(f"""
         <div class="metric-card">
-            <div class="metric-title">Lignes Brutes</div>
+            <div class="metric-title">Lignes Initiales</div>
             <div class="metric-value">{stats['initial_rows']:,}</div>
             <div class="metric-footer">Avant traitement</div>
         </div>
@@ -257,55 +292,166 @@ if st.session_state.dedup_df is not None and st.session_state.stats is not None:
         """, unsafe_allow_html=True)
 
     with k4:
+        unique_comps = df_result[roles["entreprise"]].dropna().nunique() if (roles["entreprise"] and roles["entreprise"] in df_result.columns) else 0
         st.markdown(f"""
         <div class="metric-card" style="border-top: 3px solid #0284C7;">
-            <div class="metric-title">Entreprises Groupées</div>
-            <div class="metric-value" style="color: #0284C7;">{stats.get('unique_companies', 0):,}</div>
-            <div class="metric-footer">Sections contiguës</div>
+            <div class="metric-title">Sociétés Groupées</div>
+            <div class="metric-value" style="color: #0284C7;">{unique_comps:,}</div>
+            <div class="metric-footer">Sections continues</div>
         </div>
         """, unsafe_allow_html=True)
 
     with k5:
         st.markdown(f"""
         <div class="metric-card" style="border-top: 3px solid #10B981;">
-            <div class="metric-title">Contacts Prêts</div>
-            <div class="metric-value" style="color: #10B981;">{stats['final_rows']:,}</div>
-            <div class="metric-footer">Base propre exploitable</div>
+            <div class="metric-title">Contacts Actifs</div>
+            <div class="metric-value" style="color: #10B981;">{len(df_result):,}</div>
+            <div class="metric-footer">Prêts pour export</div>
         </div>
         """, unsafe_allow_html=True)
 
-    # Détail des critères
+    # 2. Boutons d'Action & Téléchargement
     st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
-    c1, c2, c3, c4 = st.columns(4)
-    c1.info(f"🔗 **Doublons LinkedIn :** {stats['dedup_by_linkedin']}")
-    c2.info(f"✉️ **Doublons Email :** {stats['dedup_by_email']}")
-    c3.info(f"👤 **Doublons Triplet :** {stats['dedup_by_triplet']}")
-    c4.success(f"🧹 **Lignes vides purgées :** {stats.get('purged_empty_rows', 0)}")
-
-    # 2. Bouton Téléchargement Prominent
-    st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
     current_export_buffer = export_to_excel(df_result)
-    
-    dl_col1, dl_col2 = st.columns([3, 1])
-    with dl_col1:
+
+    act_c1, act_c2, act_c3 = st.columns([3, 1, 1])
+    with act_c1:
         st.download_button(
-            label=f"📥 Télécharger le Fichier Excel Final ({len(df_result)} contacts groupés par société)",
+            label=f"📥 Télécharger le Fichier Excel Final ({len(df_result)} contacts uniques)",
             data=current_export_buffer,
-            file_name=st.session_state.export_filename or "contacts_fusionnes_propres.xlsx",
+            file_name=st.session_state.export_filename or "contacts_fusionnes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             type="primary",
             use_container_width=True,
         )
-    with dl_col2:
-        st.caption(f"✨ Zéro ligne vide, entreprises groupées en sections et styles openpyxl.")
+    with act_c2:
+        if st.button("↩️ Annuler (Undo)", use_container_width=True, disabled=len(st.session_state.history) == 0):
+            undo_last_action()
+            st.rerun()
+    with act_c3:
+        if st.session_state.last_action_msg:
+            st.caption(f"📢 {st.session_state.last_action_msg}")
 
-    # 3. Onglets de Consultation
-    tab_data, tab_charts, tab_logs = st.tabs(["📋 Aperçu des Contacts Groupés", "📈 Répartition par Société", "📜 Journal d'Exécution"])
+    # 3. ONGLETS : STUDIO D'ÉDITION & ASSISTANT IA
+    st.markdown("---")
+    tab_studio, tab_data, tab_charts, tab_logs = st.tabs([
+        "🎛️ Studio d'Édition & Assistant IA",
+        "📋 Tableau des Contacts",
+        "📈 Répartition par Société",
+        "📜 Journal d'Exécution"
+    ])
 
+    # --- TAB 1 : STUDIO D'ÉDITION ---
+    with tab_studio:
+        st.markdown("### 🤖 Assistant de Commandes & Filtrage Personnalisé")
+        st.markdown("Exécutez des commandes en langage naturel ou utilisez les sélecteurs pour modifier et affiner vos contacts.")
+
+        # Sous-colonnes : Assistant Prompt vs Outils Chirurgiques
+        studio_left, studio_right = st.columns([1, 1])
+
+        with studio_left:
+            st.markdown("#### 💬 Commande en Langage Naturel")
+            cmd_input = st.text_input(
+                "Entrez votre instruction :",
+                placeholder="Ex: 'supprimer les lignes 1 à 5', 'supprimer entreprise Airbus', 'supprimer statut invalide', 'supprimer score < 80'",
+                key="cmd_prompt_input"
+            )
+            col_exec_btn, col_help_txt = st.columns([1, 2])
+            with col_exec_btn:
+                if st.button("⚡ Exécuter", type="primary", use_container_width=True):
+                    if cmd_input:
+                        push_history(df_result)
+                        new_df, msg, success = execute_smart_command(df_result, cmd_input)
+                        if success:
+                            st.session_state.dedup_df = new_df
+                            st.session_state.last_action_msg = msg
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.warning(msg)
+                    else:
+                        st.info("Veuillez saisir une commande.")
+
+            with col_help_txt:
+                st.caption("💡 *Comprend : plages de lignes ('1-5'), noms d'entreprises ('Airbus'), statuts ('invalide'), scores ('< 70'), etc.*")
+
+            st.markdown("---")
+            st.markdown("#### ⚡ Filtres Rapides en 1 Clic")
+            f_c1, f_c2, f_c3 = st.columns(3)
+            with f_c1:
+                if st.button("🔴 Purger Statuts Invalides", use_container_width=True):
+                    push_history(df_result)
+                    new_df, msg, ok = execute_smart_command(df_result, "supprimer statut invalide")
+                    st.session_state.dedup_df = new_df
+                    st.session_state.last_action_msg = msg
+                    st.rerun()
+            with f_c2:
+                if st.button("📉 Purger Scores < 80%", use_container_width=True):
+                    push_history(df_result)
+                    new_df, msg, ok = execute_smart_command(df_result, "supprimer score < 80")
+                    st.session_state.dedup_df = new_df
+                    st.session_state.last_action_msg = msg
+                    st.rerun()
+            with f_c3:
+                if st.button("✉️ Purger Sans Email", use_container_width=True):
+                    push_history(df_result)
+                    new_df, msg, ok = execute_smart_command(df_result, "supprimer sans email")
+                    st.session_state.dedup_df = new_df
+                    st.session_state.last_action_msg = msg
+                    st.rerun()
+
+        with studio_right:
+            st.markdown("#### 🏢 Suppression par Société / Entreprise")
+            col_ent = roles["entreprise"]
+            if col_ent and col_ent in df_result.columns:
+                comp_counts = df_result[col_ent].dropna().value_counts()
+                comp_options = [f"{comp} ({count} contacts)" for comp, count in comp_counts.items()]
+                comp_map = {f"{comp} ({count} contacts)": comp for comp, count in comp_counts.items()}
+
+                selected_comps_ui = st.multiselect(
+                    "Sélectionnez une ou plusieurs entreprises à supprimer intégralement :",
+                    options=comp_options,
+                    placeholder="Choisir une société...",
+                    key="multiselect_comp_delete"
+                )
+
+                if st.button("🗑️ Supprimer toute(s) cette/ces société(s)", type="secondary", disabled=not selected_comps_ui, use_container_width=True):
+                    target_comps = [comp_map[c] for c in selected_comps_ui]
+                    push_history(df_result)
+                    new_df, del_count = delete_by_companies(df_result, target_comps)
+                    st.session_state.dedup_df = new_df
+                    st.session_state.last_action_msg = f"🗑️ {del_count} contact(s) supprimé(s) pour {len(target_comps)} entreprise(s)."
+                    st.toast(f"{del_count} contacts supprimés !", icon="🗑️")
+                    st.rerun()
+            else:
+                st.info("Aucune colonne d'entreprise détectée.")
+
+            st.markdown("---")
+            st.markdown("#### 🔢 Suppression par Numéros ou Plages de Lignes")
+            range_input = st.text_input(
+                "Entrez les numéros de lignes (1-indexé) :",
+                placeholder="Ex: 1-5, 12, 20-30",
+                key="manual_range_delete_input"
+            )
+            if st.button("🗑️ Supprimer ces numéros de lignes", disabled=not range_input, use_container_width=True):
+                indices = parse_line_ranges(range_input, len(df_result))
+                if indices:
+                    push_history(df_result)
+                    new_df, del_count = delete_by_indices(df_result, indices)
+                    st.session_state.dedup_df = new_df
+                    st.session_state.last_action_msg = f"🗑️ {del_count} ligne(s) spécifique(s) supprimée(s)."
+                    st.toast(f"{del_count} lignes supprimées !", icon="🗑️")
+                    st.rerun()
+                else:
+                    st.warning("Aucune ligne valide dans la plage saisie.")
+
+    # --- TAB 2 : TABLEAU DES CONTACTS ---
     with tab_data:
-        search_kw = st.text_input("🔍 Recherche rapide dans la table :", "")
+        search_kw = st.text_input("🔍 Recherche rapide dans la table :", "", key="search_table_kw")
         
         display_df = df_result.copy()
+        display_df.insert(0, "N°", range(1, len(display_df) + 1))
+
         if search_kw:
             mask = display_df.astype(str).apply(lambda row: row.str.contains(search_kw, case=False, na=False).any(), axis=1)
             display_df = display_df[mask]
@@ -318,6 +464,7 @@ if st.session_state.dedup_df is not None and st.session_state.stats is not None:
         )
         st.caption(f"Affichage de {len(display_df)} sur {len(df_result)} contacts uniques ({len(df_result.columns)} colonnes).")
 
+    # --- TAB 3 : GRAPHIQUES ---
     with tab_charts:
         ch1, ch2 = st.columns([3, 2])
         col_ent = roles["entreprise"]
@@ -361,6 +508,7 @@ if st.session_state.dedup_df is not None and st.session_state.stats is not None:
                 )
                 st.plotly_chart(fig_pie, use_container_width=True)
 
+    # --- TAB 4 : LOGS ---
     with tab_logs:
         logs = log_buffer.get_logs()
         if logs:
