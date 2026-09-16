@@ -1,7 +1,7 @@
 """
 Application Streamlit - FUSION : Fusionneur Excel avec Déduplication Intelligente.
 Préserve 100% des colonnes et données d'origine sans altération.
-Confidentialité totale des données.
+Nettoyage des emails, suppression des lignes vides et groupement contigu par entreprise.
 """
 
 import io
@@ -22,7 +22,7 @@ logger = setup_logger()
 
 # Configuration Streamlit
 st.set_page_config(
-    page_title="Fusion — Déduplication Excel",
+    page_title="Fusion — Déduplication & Nettoyage Excel",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -79,7 +79,7 @@ st.markdown("""
         font-weight: 600;
     }
     .metric-value {
-        font-size: 1.9rem;
+        font-size: 1.8rem;
         font-weight: 700;
         color: #0F172A;
         margin: 4px 0;
@@ -163,10 +163,10 @@ def reset_state():
 # --- HERO BANNER ---
 st.markdown("""
 <div class="hero-container">
-    <div class="hero-title">⚡ FUSION &bull; Fusionneur Excel & Déduplication Intelligente</div>
+    <div class="hero-title">⚡ FUSION &bull; Déduplication, Nettoyage & Groupement Excel</div>
     <div class="hero-subtitle">
-        Fusionnez instantanément vos fichiers Excel en conservant <b>100% de vos colonnes et données d'origine</b> sans aucune perte.<br>
-        Déduplication intelligente en cascade (LinkedIn &gt; Email &gt; Triplet) et export Excel stylisé.
+        Fusionnez vos fichiers, <b>validez les emails réels</b>, supprimez les lignes vides et <b>regroupez chaque entreprise en section continue</b>.<br>
+        100% de vos colonnes et données utiles sont conservées dans un fichier prêt pour vos campagnes d'envoi.
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -179,12 +179,12 @@ with upload_col:
         "📁 Déposez vos fichiers Excel (.xlsx, .xls) :",
         type=["xlsx", "xls"],
         accept_multiple_files=True,
-        help="Sélectionnez vos fichiers Excel. Toutes vos colonnes sont préservées à l'identique."
+        help="Sélectionnez un ou plusieurs fichiers Excel. Le système nettoie, déduplique et groupe par entreprise."
     )
 
 with action_col:
     st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
-    btn_process = st.button("🚀 Fusionner les fichiers", type="primary", use_container_width=True, disabled=not uploaded_files)
+    btn_process = st.button("🚀 Fusionner & Nettoyer", type="primary", use_container_width=True, disabled=not uploaded_files)
     btn_clear = st.button("🗑️ Réinitialiser", use_container_width=True, on_click=reset_state)
 
 # Affichage des badges de fichiers
@@ -199,13 +199,13 @@ if uploaded_files:
 
 # Traitement de fusion
 if btn_process and uploaded_files:
-    with st.spinner("Traitement et déduplication en cours..."):
+    with st.spinner("Nettoyage des emails, déduplication et groupement par société en cours..."):
         # 1. Lecture sans altération des colonnes
         raw_df, count_files, total_raw = read_excel_files(uploaded_files)
         st.session_state.raw_df = raw_df
 
         if not raw_df.empty:
-            # 2. Déduplication intelligente
+            # 2. Déduplication intelligente, nettoyage et groupement par société
             dedup_df, stats = deduplicate_contacts(raw_df)
             
             # 3. Export Excel stylisé
@@ -217,7 +217,7 @@ if btn_process and uploaded_files:
             st.session_state.excel_buffer = excel_buffer
             st.session_state.export_filename = export_name
             
-            st.toast("Fusion et déduplication terminées avec succès !", icon="✅")
+            st.toast("Base fusionnée, dédupliquée et groupée par entreprise !", icon="✅")
 
 # --- RÉSULTATS & VISUALISATIONS ---
 if st.session_state.dedup_df is not None and st.session_state.stats is not None:
@@ -228,13 +228,13 @@ if st.session_state.dedup_df is not None and st.session_state.stats is not None:
     st.markdown("---")
     
     # 1. KPI Cards
-    k1, k2, k3, k4 = st.columns(4)
+    k1, k2, k3, k4, k5 = st.columns(5)
     with k1:
         st.markdown(f"""
         <div class="metric-card">
             <div class="metric-title">Fichiers Sources</div>
             <div class="metric-value" style="color: #0A66C2;">{len(uploaded_files) if uploaded_files else 1}</div>
-            <div class="metric-footer">Fichiers traités</div>
+            <div class="metric-footer">Imports combinés</div>
         </div>
         """, unsafe_allow_html=True)
         
@@ -243,34 +243,44 @@ if st.session_state.dedup_df is not None and st.session_state.stats is not None:
         <div class="metric-card">
             <div class="metric-title">Lignes Brutes</div>
             <div class="metric-value">{stats['initial_rows']:,}</div>
-            <div class="metric-footer">Total avant déduplication</div>
+            <div class="metric-footer">Avant traitement</div>
         </div>
         """, unsafe_allow_html=True)
 
     with k3:
         st.markdown(f"""
         <div class="metric-card" style="border-top: 3px solid #E11D48;">
-            <div class="metric-title">Doublons Éliminés</div>
-            <div class="metric-value" style="color: #E11D48;">{stats['duplicates_removed']:,}</div>
-            <div class="metric-footer">Taux : <b>{stats['dedup_rate_pct']}%</b></div>
+            <div class="metric-title">Doublons & Vides</div>
+            <div class="metric-value" style="color: #E11D48;">{stats['duplicates_removed'] + stats.get('purged_empty_rows', 0):,}</div>
+            <div class="metric-footer">Purgés & éliminés</div>
         </div>
         """, unsafe_allow_html=True)
 
     with k4:
         st.markdown(f"""
+        <div class="metric-card" style="border-top: 3px solid #0284C7;">
+            <div class="metric-title">Entreprises Groupées</div>
+            <div class="metric-value" style="color: #0284C7;">{stats.get('unique_companies', 0):,}</div>
+            <div class="metric-footer">Sections contiguës</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with k5:
+        st.markdown(f"""
         <div class="metric-card" style="border-top: 3px solid #10B981;">
-            <div class="metric-title">Contacts Uniques</div>
+            <div class="metric-title">Contacts Prêts</div>
             <div class="metric-value" style="color: #10B981;">{stats['final_rows']:,}</div>
-            <div class="metric-footer">{len(df_result.columns)} colonnes préservées</div>
+            <div class="metric-footer">Base propre exploitable</div>
         </div>
         """, unsafe_allow_html=True)
 
     # Détail des critères
     st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
-    c1, c2, c3 = st.columns(3)
-    c1.info(f"🔗 **Doublons détectés par LinkedIn :** {stats['dedup_by_linkedin']}")
-    c2.info(f"✉️ **Doublons détectés par Email :** {stats['dedup_by_email']}")
-    c3.info(f"👤 **Doublons détectés par Triplet :** {stats['dedup_by_triplet']}")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.info(f"🔗 **Doublons LinkedIn :** {stats['dedup_by_linkedin']}")
+    c2.info(f"✉️ **Doublons Email :** {stats['dedup_by_email']}")
+    c3.info(f"👤 **Doublons Triplet :** {stats['dedup_by_triplet']}")
+    c4.success(f"🧹 **Lignes vides purgées :** {stats.get('purged_empty_rows', 0)}")
 
     # 2. Bouton Téléchargement Prominent
     st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
@@ -279,18 +289,18 @@ if st.session_state.dedup_df is not None and st.session_state.stats is not None:
     dl_col1, dl_col2 = st.columns([3, 1])
     with dl_col1:
         st.download_button(
-            label=f"📥 Télécharger le Fichier Excel Fusionné ({len(df_result)} contacts uniques)",
+            label=f"📥 Télécharger le Fichier Excel Final ({len(df_result)} contacts groupés par société)",
             data=current_export_buffer,
-            file_name=st.session_state.export_filename or "contacts_fusionnes.xlsx",
+            file_name=st.session_state.export_filename or "contacts_fusionnes_propres.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             type="primary",
             use_container_width=True,
         )
     with dl_col2:
-        st.caption(f"✨ 100% des colonnes conservées, filtres automatiques et styles openpyxl.")
+        st.caption(f"✨ Zéro ligne vide, entreprises groupées en sections et styles openpyxl.")
 
     # 3. Onglets de Consultation
-    tab_data, tab_charts, tab_logs = st.tabs(["📋 Aperçu des Contacts", "📈 Graphiques & Statistiques", "📜 Journal d'Exécution"])
+    tab_data, tab_charts, tab_logs = st.tabs(["📋 Aperçu des Contacts Groupés", "📈 Répartition par Société", "📜 Journal d'Exécution"])
 
     with tab_data:
         search_kw = st.text_input("🔍 Recherche rapide dans la table :", "")
@@ -300,12 +310,11 @@ if st.session_state.dedup_df is not None and st.session_state.stats is not None:
             mask = display_df.astype(str).apply(lambda row: row.str.contains(search_kw, case=False, na=False).any(), axis=1)
             display_df = display_df[mask]
 
-        # Affichage direct de toutes les colonnes réelles du fichier
         st.dataframe(
             display_df,
             use_container_width=True,
             hide_index=True,
-            height=420,
+            height=430,
         )
         st.caption(f"Affichage de {len(display_df)} sur {len(df_result)} contacts uniques ({len(df_result.columns)} colonnes).")
 
@@ -370,7 +379,7 @@ else:
     <div style="background: #F8FAFC; border: 1px dashed #CBD5E1; border-radius: 12px; padding: 40px 20px; text-align: center; color: #64748B; margin-top: 10px;">
         <div style="font-size: 2.5rem; margin-bottom: 10px;">📂</div>
         <div style="font-size: 1.1rem; font-weight: 600; color: #334155;">Aucun fichier chargé pour le moment</div>
-        <div style="font-size: 0.9rem; margin-top: 4px;">Glissez vos fichiers Excel ci-dessus puis cliquez sur "🚀 Fusionner les fichiers".</div>
+        <div style="font-size: 0.9rem; margin-top: 4px;">Glissez vos fichiers Excel ci-dessus puis cliquez sur "🚀 Fusionner & Nettoyer".</div>
     </div>
     """, unsafe_allow_html=True)
 
